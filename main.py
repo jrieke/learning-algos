@@ -7,8 +7,11 @@ import random
 
 sigmoid = sp.special.expit
 softmax = sp.special.softmax
-cross_entropy = sklearn.metrics.log_loss
-accuracy = sklearn.metrics.accuracy_score
+
+def cross_entropy(y_pred, true_label):
+    # TODO: Check if this holds for multiple samples.
+    return -np.log(y_pred[true_label])
+
 
 def d_sigmoid(x):
     return sigmoid(x) * (1 - sigmoid(x))
@@ -43,11 +46,6 @@ def backprop_update(x, y_true, lr):
     global b1, b2, W1, W2  # TODO: Remove once this is in network.
     z1, a1, z2, a2 = forward(x)
 
-    # TODO: Does this work properly with n_samples?
-    # TODO: Maybe return this.
-    loss = cross_entropy(y_true, a2)
-    loss
-
     # Compute errors for each layer.
     e2 = a2 - y_true
     e1 = d_sigmoid(z2) * e2 @ W2.T
@@ -70,20 +68,22 @@ def backprop_update(x, y_true, lr):
 
 def evaluate():
     correct = 0
+    running_loss = 0
     for i_sample, (x, y_true) in enumerate(validation_data):
-        x = x.reshape(-1)
-        y_true = y_true.reshape(-1)
+        x = x.flatten()
+        y_true = y_true.flatten()
         _, _, _, y_pred = forward(x)
         #print(x.shape, y_true, y_pred.shape)
 
-        # Targets in validation_data are labels, while in training_data, they are one-hot vectors.
-        if y_true[0] == y_pred.argmax():
+        true_label = y_true[0]  # target values in validation_data are labels (in training_data they are one-hot vectors)
+        running_loss += cross_entropy(y_pred, true_label)
+        if true_label == y_pred.argmax():
             correct += 1
 
-    avg_loss = np.NaN
+    avg_loss = running_loss / len(validation_data)
     avg_acc = correct / len(validation_data) * 100
 
-    print('Evaluating:\tLoss: {:.4f},\tAccuracy: {:.1f}%\n'.format(avg_loss, avg_acc))
+    print('Evaluating:\tLoss: {:.4f}\tAccuracy: {:.1f}%\n'.format(avg_loss, avg_acc))
 
 evaluate()
 
@@ -91,20 +91,21 @@ def train_epoch(lr, shuffle=True):
     if shuffle:
         random.shuffle(training_data)
     correct = 0
+    running_loss = 0
     for i_sample, (x, y_true) in enumerate(training_data):
-        x = x.reshape(-1)
-        y_true = y_true.reshape(-1)
+        x = x.flatten()
+        y_true = y_true.flatten()
         y_pred = backprop_update(x, y_true, lr)
 
+        true_label = y_true.argmax()  # target values in training_data they are one-hot vectors (in validation_data they are labels)
+        running_loss += cross_entropy(y_pred, true_label)
         if y_true.argmax() == y_pred.argmax():
             correct += 1
 
         if i_sample % 5000 == 1:
-            print('{} / {} samples - accuracy: {:.1f} %'.format(i_sample, len(training_data), correct / i_sample * 100))
+            print('{} / {} samples - loss: {:.6f} - accuracy: {:.1f} %'.format(i_sample, len(training_data), running_loss / i_sample, correct / i_sample * 100))
 
-    avg_loss = np.NaN
-    avg_acc = correct / len(training_data) * 100
-    print('Average:\tLoss: {:.6f}\tAccuracy: {:.1f}%'.format(avg_loss, avg_acc))
+    print('Average:\tLoss: {:.6f}\tAccuracy: {:.1f}%'.format(running_loss / len(training_data), correct / len(training_data) * 100))
 
 # Training loop.
 for epoch in range(1, 10):
@@ -113,6 +114,7 @@ for epoch in range(1, 10):
     evaluate()
     print('-'*80)
     print()
+
 
 
 # TODO: Implement mini-batching.
