@@ -18,6 +18,7 @@ def cross_entropy(y_pred, true_label):
 
 
 class NeuralNet:
+    """Note that for simplicity, this network uses sigmoid output and the mean squared error loss."""
 
     def __init__(self, num_hidden=30):
         self.W1 = np.random.randn(784, num_hidden)
@@ -35,8 +36,9 @@ class NeuralNet:
 
         # Output layer.
         z2 = a1 @ self.W2 + self.b2
-        # TODO: Using sigmoid here improves this a lot.
-        a2 = sigmoid(z2)  # TODO: When using mini batches, do axis=1.
+        a2 = sigmoid(z2)
+        # To use softmax here, do this (when using mini-batches, add axis=1):
+        #a2 = softmax(z2)
 
         return z1, a1, z2, a2
 
@@ -75,7 +77,9 @@ class NeuralNet:
         z1, a1, z2, a2 = self.forward(x)
 
         # Compute errors for each layer (= gradient of cost w.r.t layer input).
-        e2 = d_sigmoid(z2) * (a2 - y_true)  # gradient through cross entropy and softmax
+        e2 = d_sigmoid(z2) * (a2 - y_true)  # gradient through mean squared error loss and sigmoid
+        # To use cross-entropy here, do this (not sure if should be divided by len(a2) or not):
+        #e2 = (a2 - y_true) / len(a2)  # gradient through cross entropy loss and sigmoid
         e1 = d_sigmoid(z1) * (e2 @ self.W2.T)  # gradient backpropagation
 
         # Compute gradients of cost w.r.t. parameters.
