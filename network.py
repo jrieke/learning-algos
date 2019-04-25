@@ -3,10 +3,18 @@ import scipy as sp
 import scipy.special
 import sklearn.metrics
 import random
+import matplotlib.pyplot as plt
 
 
 sigmoid = sp.special.expit
 softmax = sp.special.softmax
+
+
+def plot_multiple(*arrays_and_labels):
+    for arr, lab in arrays_and_labels:
+        plt.plot(arr, label=lab)
+    plt.legend()
+    plt.show()
 
 
 def d_sigmoid(x):
@@ -166,28 +174,36 @@ class NeuralNet:
 
     def target_prop_update(self, x, y_true, lr_final, lr_forward, lr_backward):
         # Run forward pass.
-        # TODO: Rename a2, a2 to h1, h2 everywhere.
         z1, h1, z2, h2 = self.forward(x)
 
-        # Compute targets for each layer.
-        h2_ = h2 - lr_final * (h2 - y_true)  # TODO: Why not use y_true here directly?
+        # Compute targets for each layer (backward pass).
+        h2_ = h2 - lr_final * (h2 - y_true)  # Use the activation given by normal (local!) gradient descent as the last layer target. This is a smoother version than using y_true directly as the target.
         z1_ = h2_ @ self.V2 + self.c2  # TODO: Use h2 or h2_ here?
         h1_ = sigmoid(z1_)
+
+        #plt.plot(h2, label='h1')
+        #plt.plot(h2_, label='h1_')
+        #plt.plot(z1_, label='z1_')
+        #plt.legend()
+        #plt.show()
 
         # Compute layerwise loss.
         L2 = mean_squared_error(h2, h2_)
         L1 = mean_squared_error(h1, h1_)
-        #print(L2, L1)
+        #print(L2)#, L1)
+        #plt.plot(h2)
+        #plt.axvline(np.argmax(y_true))
+        #plt.show()
 
         # Compute local gradients for forward parameters.
-        dL1_db1 = 2 * np.linalg.norm(h1 - h1_) * d_sigmoid(z1)
-        dL1_dW1 = 2 * np.linalg.norm(h1 - h1_) * np.outer(x, d_sigmoid(z1))  # TODO: Simply by reusing dL1_db1.
-        dL2_db2 = 2 * np.linalg.norm(h2 - h2_) * d_sigmoid(z2)
-        dL2_dW2 = 2 * np.linalg.norm(h2 - h2_) * np.outer(h1, d_sigmoid(z2))
+        dL1_db1 = 2 * (h1 - h1_) * d_sigmoid(z1)
+        dL1_dW1 = 2 * (h1 - h1_) * np.outer(x, d_sigmoid(z1))  # TODO: Simply by reusing dL1_db1.
+        dL2_db2 = 2 * (h2 - h2_) * d_sigmoid(z2)
+        dL2_dW2 = 2 * (h2 - h2_) * np.outer(h1, d_sigmoid(z2))
 
         # Compute local gradients for backward parameters.
-        dL1_dc2 = 2 * np.linalg.norm(h1 - h1_) * d_sigmoid(z1_)  # TODO: Verify that this is correct.
-        dL1_dV2 = 2 * np.linalg.norm(h1 - h1_) * np.outer(h2_, d_sigmoid(z1_))
+        dL1_dc2 = 2 * (h1 - h1_) * d_sigmoid(z1_)  # TODO: Verify that this is correct.
+        dL1_dV2 = 2 * (h1 - h1_) * np.outer(h2_, d_sigmoid(z1_))
 
         # Update parameters.
         self.b1 -= lr_forward * dL1_db1
@@ -268,7 +284,7 @@ def train_epoch(net, training_data, lr, shuffle=True):
     for i_sample, (x, y_true) in enumerate(training_data):
         x = x.flatten()
         y_true = y_true.flatten()
-        y_pred = net.target_prop_update(x, y_true, 3, 3, 3)#lr)
+        y_pred = net.target_prop_update(x, y_true, 0.5, 0.5, 0.01)#lr)
 
         true_label = y_true.argmax()  # target values in training_data they are one-hot vectors (in validation_data they are labels)
         running_loss += cross_entropy(y_pred, true_label)
