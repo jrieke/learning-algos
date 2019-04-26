@@ -10,6 +10,18 @@ sigmoid = sp.special.expit
 softmax = sp.special.softmax
 
 
+def unit_vector(vector):
+    """ Returns the unit vector of the vector.  """
+    return vector / np.linalg.norm(vector)
+
+
+def angle_between(v1, v2):
+    """Returns the angle in radians between vectors 'v1' and 'v2'."""
+    v1_u = unit_vector(v1)
+    v2_u = unit_vector(v2)
+    return np.arccos(np.clip(np.dot(v1_u, v2_u), -1.0, 1.0))
+
+
 def plot_multiple(*arrays_and_labels):
     for arr, lab in arrays_and_labels:
         plt.plot(arr, label=lab)
@@ -55,36 +67,6 @@ class NeuralNet:
         #h2 = softmax(z2)
 
         return z1, h1, z2, h2
-
-    # def backprop_update(self, batch, lr):
-    #     # Average gradients over the mini batch.
-    #     grads_b1, grads_b2, grads_W1, grads_W2 = 0, 0, 0, 0
-    #     outputs = []
-    #     for x, y_true in batch:
-    #         x = x.flatten()
-    #         y_true = y_true.flatten()
-    #
-    #         # Run forward pass.
-    #         z1, a1, z2, a2 = self.forward(x)
-    #         outputs.append(a2)
-    #
-    #         # Compute errors for each layer (= gradient of cost w.r.t layer input).
-    #         e2 = a2 - y_true  # gradient through cross entropy and softmax
-    #         e1 = d_sigmoid(z2) * e2 @ self.W2.T  # gradient backpropagation
-    #
-    #         # Compute gradients of cost w.r.t. parameters.
-    #         grads_b1 += e1
-    #         grads_b2 += e2
-    #         grads_W1 += np.outer(x, e1)  # np.outer creates a matrix from two vectors
-    #         grads_W2 += np.outer(a1, e2)
-    #
-    #     # Update parameters.
-    #     self.b1 -= lr * grads_b1 / len(batch)
-    #     self.b2 -= lr * grads_b2 / len(batch)
-    #     self.W1 -= lr * grads_W1 / len(batch)
-    #     self.W2 -= lr * grads_W2 / len(batch)
-    #
-    #     return np.array(outputs)
 
     def backprop_update(self, x, y_true, lr):
         # Run forward pass.
@@ -169,8 +151,37 @@ class NeuralNet:
 
         return h2
 
-    def weight_mirroring_update(self, x, y_true, lr):
-        pass
+    def weight_mirroring_update(self, x, y_true, lr_forward, lr_backward, weight_decay_backward, only_mirroring=False):
+        # "Engaged mode": Forward pass on input image, backward pass to adapt forward weights.
+        if not only_mirroring:
+            # Run forward pass.
+            z1, h1, z2, h2 = self.forward(x)
+
+            # Compute errors for each layer (= gradient of cost w.r.t layer input).
+            e2 = h2 - y_true  # gradient through cross entropy loss
+            e1 = d_sigmoid(z1) * (e2 @ self.V2)  # gradient backpropagation
+
+            # Compute gradients of cost w.r.t. parameters.
+            grad_b1 = e1
+            grad_b2 = e2
+            grad_W1 = np.outer(x, e1)  # np.outer creates a matrix from two vectors
+            grad_W2 = np.outer(h1, e2)
+
+            # Update parameters.
+            self.b1 -= lr_forward * grad_b1
+            self.b2 -= lr_forward * grad_b2
+            self.W1 -= lr_forward * grad_W1
+            self.W2 -= lr_forward * grad_W2
+
+
+        # "Mirroring mode": Compute activies for random inputs, adapt backward weights.
+        x2_noise = np.random.randn(self.W2.shape[0])
+        h2_noise = sigmoid(x2_noise @ self.W2 + self.b2)
+        self.V2 += lr_backward * np.outer(h2_noise, x2_noise) - lr_backward * weight_decay_backward * self.V2
+        # TODO: In the paper, they pass one signal through the network, but subtract the mean at each layer to get 0-mean signals (is this biologically plausible?).
+
+        if not only_mirroring:
+            return h2
 
     def target_prop_update(self, x, y_true, lr_final, lr_forward, lr_backward):
         # Run forward pass.
@@ -178,22 +189,13 @@ class NeuralNet:
 
         # Compute targets for each layer (backward pass).
         h2_ = h2 - lr_final * (h2 - y_true)  # Use the activation given by normal (local!) gradient descent as the last layer target. This is a smoother version than using y_true directly as the target.
-        z1_ = h2_ @ self.V2 + self.c2  # TODO: Use h2 or h2_ here?
-        h1_ = sigmoid(z1_)
-
-        #plt.plot(h2, label='h1')
-        #plt.plot(h2_, label='h1_')
-        #plt.plot(z1_, label='z1_')
-        #plt.legend()
-        #plt.show()
+        q1_ = h2_ @ self.V2 + self.c2  # TODO: Use h2 or h2_ here?
+        h1_ = sigmoid(q1_)
 
         # Compute layerwise loss.
         L2 = mean_squared_error(h2, h2_)
         L1 = mean_squared_error(h1, h1_)
         #print(L2)#, L1)
-        #plt.plot(h2)
-        #plt.axvline(np.argmax(y_true))
-        #plt.show()
 
         # Compute local gradients for forward parameters.
         dL1_db1 = 2 * (h1 - h1_) * d_sigmoid(z1)
@@ -202,8 +204,12 @@ class NeuralNet:
         dL2_dW2 = 2 * (h2 - h2_) * np.outer(h1, d_sigmoid(z2))
 
         # Compute local gradients for backward parameters.
-        dL1_dc2 = 2 * (h1 - h1_) * d_sigmoid(z1_)  # TODO: Verify that this is correct.
-        dL1_dV2 = 2 * (h1 - h1_) * np.outer(h2_, d_sigmoid(z1_))
+        # TODO: I think this is wrong!
+        #dL1_dc2 = 2 * (h1 - h1_) * d_sigmoid(q1)  # TODO: Verify that this is correct.
+        #dL1_dV2 = 2 * (h1 - h1_) * np.outer(h2_, d_sigmoid(q1))
+        dL1_dc2 = 2 * (h1 - sigmoid(h2 @ self.V2 + self.c2)) * d_sigmoid(h2 @ self.V2 + self.c2)
+        dL1_dV2 = 2 * (h1 - sigmoid(h2 @ self.V2 + self.c2)) * np.outer(h2, d_sigmoid(h2 @ self.V2 + self.c2))
+
 
         # Update parameters.
         self.b1 -= lr_forward * dL1_db1
@@ -239,41 +245,15 @@ def evaluate(net, evaluation_data):
     print('Evaluating:\tLoss: {:.4f}\tAccuracy: {:.1f}%\n'.format(avg_loss, avg_acc))
 
 
-# def create_batches(data, batch_size):
-#     return [data[k:k+batch_size] for k in range(0, len(data), batch_size)]
+def train_mirroring_epoch(net, num_samples, lr_backward, weight_decay_backward):
+    angle_before = np.rad2deg(angle_between(net.V2.flatten(), net.W2.T.flatten()))
+    mean_before = net.V2.mean()
+    for i_sample in range(num_samples):
+        net.weight_mirroring_update(None, None, lr_forward=0, lr_backward=lr_backward, weight_decay_backward=weight_decay_backward, only_mirroring=True)
+    angle_after = np.rad2deg(angle_between(net.V2.flatten(), net.W2.T.flatten()))
+    mean_after = net.V2.mean()
+    print(f'Ran mirroring for one epoch, reduced angle between V2 and W2.T from {angle_before}° to {angle_after}°, mean of V2 changed from {mean_before} to {mean_after}')
 
-
-# def train_epoch(net, training_data, lr, batch_size, shuffle=True):
-#     if shuffle:
-#         random.shuffle(training_data)
-#     correct = 0
-#     running_loss = 0
-#     for i_batch, batch in enumerate(create_batches(training_data, batch_size)):
-#         net.backprop_update(batch, lr)
-#
-#         true_labels = [y_true.flatten() for x, y_true in batch]
-#         # TODO: Check if this works for multi-class.
-#         #running_loss += cross_entropy(y_pred, true_label)
-#         #if true_label == y_pred.argmax():
-#         #    correct += 1
-#
-#     # for i_sample, (x, y_true) in enumerate(training_data):
-#     #     x = x.flatten()
-#     #     y_true = y_true.flatten()
-#     #     y_pred = net.backprop_update(x, y_true, lr)
-#     #
-#     #     true_label = y_true.argmax()  # target values in training_data they are one-hot vectors (in validation_data they are labels)
-#     #     running_loss += cross_entropy(y_pred, true_label)
-#     #     if true_label == y_pred.argmax():
-#     #         correct += 1
-#     #
-#     #     if i_sample % 5000 == 1:
-#     #         print('{} / {} samples - loss: {:.6f} - accuracy: {:.1f} %'.format(i_sample, len(training_data), running_loss / i_sample, correct / i_sample * 100))
-#         if i_batch % 100 == 1:
-#             print(i_batch)
-#             #print('{} / {} samples - loss: {:.6f} - accuracy: {:.1f} %'.format(i_sample, len(training_data), running_loss / i_sample, correct / i_sample * 100))
-#
-#     print('Average:\tLoss: {:.6f}\tAccuracy: {:.1f}%'.format(running_loss / len(training_data), correct / len(training_data) * 100))
 
 
 def train_epoch(net, training_data, lr, shuffle=True):
@@ -284,7 +264,9 @@ def train_epoch(net, training_data, lr, shuffle=True):
     for i_sample, (x, y_true) in enumerate(training_data):
         x = x.flatten()
         y_true = y_true.flatten()
-        y_pred = net.target_prop_update(x, y_true, 0.5, 0.5, 0.01)#lr)
+        #y_pred = net.target_prop_update(x, y_true, 0.5, 0.1, 0.001)#lr)
+        #y_pred = net.feedback_alignment_update(x, y_true, 0.2)
+        y_pred = net.weight_mirroring_update(x, y_true, lr_forward=0.1, lr_backward=0.005, weight_decay_backward=0.2)
 
         true_label = y_true.argmax()  # target values in training_data they are one-hot vectors (in validation_data they are labels)
         running_loss += cross_entropy(y_pred, true_label)
@@ -295,3 +277,5 @@ def train_epoch(net, training_data, lr, shuffle=True):
             print('{} / {} samples - loss: {:.6f} - accuracy: {:.1f} %'.format(i_sample, len(training_data), running_loss / i_sample, correct / i_sample * 100))
 
     print('Average:\tLoss: {:.6f}\tAccuracy: {:.1f}%'.format(running_loss / len(training_data), correct / len(training_data) * 100))
+    print('Angle between V2 and W2.T', np.rad2deg(angle_between(net.V2.flatten(), net.W2.T.flatten())))
+    print('Mean of V2 ', net.V2.mean())
