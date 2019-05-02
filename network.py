@@ -4,10 +4,29 @@ import scipy.special
 import sklearn.metrics
 import random
 import matplotlib.pyplot as plt
+import collections
 
 
 sigmoid = sp.special.expit
 softmax = sp.special.softmax
+
+
+class Logger:
+
+    def __init__(self):
+        self.epoch_values = collections.defaultdict(list)
+        self.batch_values = collections.defaultdict(list)
+
+    def log(self, name, value):
+        self.batch_values[name].append(value)
+
+    def epoch(self):
+        for name in self.batch_values:
+            self.epoch_values[name].append(np.mean(self.batch_values[name]))
+
+    def current_average(self):
+        return {name: np.mean(self.batch_values[name]) for name in self.batch_values}
+
 
 
 def unit_vector(vector):
@@ -187,37 +206,48 @@ class NeuralNet:
         # Run forward pass.
         z1, h1, z2, h2 = self.forward(x)
 
-        # Compute targets for each layer (backward pass).
-        h2_ = h2 - lr_final * (h2 - y_true)  # Use the activation given by normal (local!) gradient descent as the last layer target. This is a smoother version than using y_true directly as the target.
-        q1_ = h2_ @ self.V2 + self.c2  # TODO: Use h2 or h2_ here?
-        h1_ = sigmoid(q1_)
+        # ---------- Phase 1: Compute targets and change feedforward weights. ----------
+        # --------------------- (-> activations approximate targets) -------------------
+        # Compute final layer target and backpropagate it.
+        h2_target = h2 - lr_final * (h2 - y_true)  # Use the activation given by normal (local!) gradient descent as the last layer target. This is a smoother version than using y_true directly as the target.
+        z1_target = h2_target @ self.V2 + self.c2  # Backpropagate the targets.
+        h1_target = sigmoid(z1_target)
 
-        # Compute layerwise loss.
-        L2 = mean_squared_error(h2, h2_)
-        L1 = mean_squared_error(h1, h1_)
-        #print(L2)#, L1)
+        # Compute (local) forward losses.
+        L1 = mean_squared_error(h1, h1_target)
+        L2 = mean_squared_error(h2, h2_target)
 
-        # Compute local gradients for forward parameters.
-        dL1_db1 = 2 * (h1 - h1_) * d_sigmoid(z1)
-        dL1_dW1 = 2 * (h1 - h1_) * np.outer(x, d_sigmoid(z1))  # TODO: Simply by reusing dL1_db1.
-        dL2_db2 = 2 * (h2 - h2_) * d_sigmoid(z2)
-        dL2_dW2 = 2 * (h2 - h2_) * np.outer(h1, d_sigmoid(z2))
+        # Compute gradients of forward losses w.r.t. forward parameters.
+        dL1_db1 = 2 * (h1 - h1_target) * d_sigmoid(z1)
+        dL1_dW1 = 2 * (h1 - h1_target) * np.outer(x, d_sigmoid(z1))  # TODO: Simply by reusing dL1_db1.
+        dL2_db2 = 2 * (h2 - h2_target) * d_sigmoid(z2)
+        dL2_dW2 = 2 * (h2 - h2_target) * np.outer(h1, d_sigmoid(z2))
 
-        # Compute local gradients for backward parameters.
-        # TODO: I think this is wrong!
-        #dL1_dc2 = 2 * (h1 - h1_) * d_sigmoid(q1)  # TODO: Verify that this is correct.
-        #dL1_dV2 = 2 * (h1 - h1_) * np.outer(h2_, d_sigmoid(q1))
-        dL1_dc2 = 2 * (h1 - sigmoid(h2 @ self.V2 + self.c2)) * d_sigmoid(h2 @ self.V2 + self.c2)
-        dL1_dV2 = 2 * (h1 - sigmoid(h2 @ self.V2 + self.c2)) * np.outer(h2, d_sigmoid(h2 @ self.V2 + self.c2))
-
-
-        # Update parameters.
+        # Update forward parameters.
         self.b1 -= lr_forward * dL1_db1
         self.W1 -= lr_forward * dL1_dW1
         self.b2 -= lr_forward * dL2_db2
         self.W2 -= lr_forward * dL2_dW2
-        self.c2 -= lr_backward * dL1_dc2
-        self.V2 -= lr_backward * dL1_dV2
+
+
+        # ---------- Phase 2: Compute reconstructed activations and change feedback weights. ----------
+        # ------------- (-> backward function approximates inverse of forward function) ---------------
+        # Compute reconstructed activations (here we only have one feedback connection).
+        z1_reconstructed = h2 @ self.V2 + self.c2
+        h1_reconstructed = sigmoid(z1_reconstructed)
+
+        # Compute reconstruction loss.
+        L_rec1 = mean_squared_error(h1, h1_reconstructed)
+
+        # Compute gradients of reconstruction loss w.r.t. forward parameters.
+        dL_rec1_dc2 = 2 * (h1_reconstructed - h1) * d_sigmoid(z1_reconstructed)
+        dL_rec1_dV2 = 2 * (h1_reconstructed - h1) * np.outer(h2, d_sigmoid(z1_reconstructed))
+
+        losses = [L1, L2, L_rec1]
+
+        # Update backward parameters.
+        self.c2 -= lr_backward * dL_rec1_dc2
+        self.V2 -= lr_backward * dL_rec1_dV2
 
         return h2
 
@@ -264,9 +294,9 @@ def train_epoch(net, training_data, lr, shuffle=True):
     for i_sample, (x, y_true) in enumerate(training_data):
         x = x.flatten()
         y_true = y_true.flatten()
-        #y_pred = net.target_prop_update(x, y_true, 0.5, 0.1, 0.001)#lr)
+        y_pred = net.target_prop_update(x, y_true, 0.5, 0.3, 0.001)#lr)
         #y_pred = net.feedback_alignment_update(x, y_true, 0.2)
-        y_pred = net.weight_mirroring_update(x, y_true, lr_forward=0.1, lr_backward=0.005, weight_decay_backward=0.2)
+        #y_pred = net.weight_mirroring_update(x, y_true, lr_forward=0.1, lr_backward=0.005, weight_decay_backward=0.2)
 
         true_label = y_true.argmax()  # target values in training_data they are one-hot vectors (in validation_data they are labels)
         running_loss += cross_entropy(y_pred, true_label)
