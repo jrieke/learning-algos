@@ -1,69 +1,69 @@
 import numpy as np
 import random
 import mnist_loader
+import collections
+import utils
+
+
+class Averager:
+    """Record different variables and compute their averages."""
+
+    def __init__(self):
+        self.summed_values = collections.defaultdict(lambda: 0)
+        self.counts = collections.defaultdict(lambda: 0)
+
+    def add(self, name, value):
+        self.summed_values[name] += value
+        self.counts[name] += 1
+
+    def get(self):
+        return {name: self.summed_values[name] / self.counts[name] for name in self.summed_values}
+
+    def __str__(self):
+        return ' - '.join(f'{k}: {v:.3f}' for k, v in self.get().items())
 
 
 def cross_entropy(y_pred, true_label):
-    # TODO: Check if this holds for multiple samples.
     return -np.log(y_pred[true_label])
 
 
-def unit_vector(vector):
-    """ Returns the unit vector of the vector.  """
-    return vector / np.linalg.norm(vector)
-
-
-def angle_between(v1, v2):
-    """Returns the angle in radians between vectors 'v1' and 'v2'."""
-    v1_u = unit_vector(v1)
-    v2_u = unit_vector(v2)
-    return np.arccos(np.clip(np.dot(v1_u, v2_u), -1.0, 1.0))
-
-
 def evaluate(net, evaluation_data):
-    correct = 0
-    running_loss = 0
+    """Evaluate the network on the evaluation_data."""
+    averager = Averager()
     for i_sample, (x, y_true) in enumerate(evaluation_data):
         x = x.flatten()
         y_true = y_true.flatten()
         _, _, _, y_pred = net.forward(x)
 
         true_label = y_true[0]  # target values in validation_data are labels (in training_data they are one-hot vectors)
-        running_loss += cross_entropy(y_pred, true_label)
-        if true_label == y_pred.argmax():
-            correct += 1
+        averager.add('loss', cross_entropy(y_pred, true_label))
+        averager.add('acc', true_label == y_pred.argmax())
 
-    avg_loss = running_loss / len(evaluation_data)
-    avg_acc = correct / len(evaluation_data) * 100
-
-    print('Evaluating:\tLoss: {:.4f}\tAccuracy: {:.1f}%\n'.format(avg_loss, avg_acc))
+    print('Eval set average:\t', averager)
 
 
 def train_epoch(net, training_data, params):
+    """Train the network for one epoch on the training_data."""
     random.shuffle(training_data)
-    correct = 0
-    running_loss = 0
+    averager = Averager()
     for i_sample, (x, y_true) in enumerate(training_data):
         x = x.flatten()
         y_true = y_true.flatten()
-        y_pred = net.update(x, y_true, params)
+
+        y_pred = net.update(x, y_true, params, averager)
 
         true_label = y_true.argmax()  # target values in training_data they are one-hot vectors (in validation_data they are labels)
-        running_loss += cross_entropy(y_pred, true_label)
-        if true_label == y_pred.argmax():
-            correct += 1
+        averager.add('loss', cross_entropy(y_pred, true_label))
+        averager.add('acc', true_label == y_pred.argmax())
 
         if i_sample % 5000 == 1:
-            print('{} / {} samples - loss: {:.6f} - accuracy: {:.1f} %'.format(i_sample, len(training_data), running_loss / i_sample, correct / i_sample * 100))
+            print(f'{i_sample} / {len(training_data)} samples - {averager}')
 
-    print('Average:\tLoss: {:.6f}\tAccuracy: {:.1f}%'.format(running_loss / len(training_data), correct / len(training_data) * 100))
-
-    # TODO: Print this only for nets that have an explicit feedback connection.
-    #print('Angle between V2 and W2.T', np.rad2deg(angle_between(net.V2.flatten(), net.W2.T.flatten())))
-    #print('Mean of V2 ', net.V2.mean())
+    print('Train set average:\t', averager)
 
 
 def train(net, params, num_epochs=20):
+    """Train the network completely."""
     training_data, validation_data, test_data = mnist_loader.load_data_wrapper()
 
     for epoch in range(num_epochs):
@@ -75,13 +75,14 @@ def train(net, params, num_epochs=20):
 
 
 def train_mirroring(net, params, num_epochs=2):
+    """Train only the mirroring phase of a WeightMirroringNetwork (50k iterations per epoch, i.e. the same as MNIST)."""
+    print()
     for epoch in range(num_epochs):
-        angle_before = np.rad2deg(angle_between(net.V2.flatten(), net.W2.T.flatten()))
+        angle_before = np.rad2deg(utils.angle_between(net.V2.flatten(), net.W2.T.flatten()))
         mean_before = net.V2.mean()
         for i_sample in range(50000):  # as many samples as in MNIST training set
             net.update_weight_mirror(params)
-        angle_after = np.rad2deg(angle_between(net.V2.flatten(), net.W2.T.flatten()))
+        angle_after = np.rad2deg(utils.angle_between(net.V2.flatten(), net.W2.T.flatten()))
         mean_after = net.V2.mean()
-        # TODO: Somehow this doesn't print properly. When run twice, it only prints the second line.
-        print(f'Ran mirroring for one epoch, reduced angle between V2 and W2.T from {angle_before}° to {angle_after}°, mean of V2 changed from {mean_before} to {mean_after}')
-
+        print(f'Ran mirroring for one epoch, angle: {angle_before:.3f}° -> {angle_after:.3f}°, mean of backward weight: {mean_before:.3f} -> {mean_after:.3f}')
+    print()
