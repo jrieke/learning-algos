@@ -255,3 +255,99 @@ class TargetPropagationNet(BaseNet):
         averager.add('backward_mean', np.mean(self.V2.flatten()))
 
         return h2
+
+
+class EquilibriumPropagationNet(BaseNet):
+
+    def __init__(self, num_hidden=30):
+        super().__init__(num_hidden)
+        # TODO: Does this need explicit backward weights? I think not. Or could one combine this with e.g. weight mirroring?
+
+    def update(self, x, y_true, params, averager=None):
+        u1 = np.random.randn(len(self.b1))
+        u2 = np.random.randn(len(self.b2))
+        rho_u1 = sigmoid(u1)
+        rho_u2 = sigmoid(u2)
+
+        # Step 1, free phase: Clamp x, relax to fixed point s_0, collect derivative dF_dW.
+        # TODO: Use hard sigmoid and modified update rule, this is critical according to the paper.
+        for step in range(20):
+
+            # TODO: Use hard sigmoid.
+
+            # TODO: Summation over i == j should be excluded. Maybe just set the weights to 0 at each iteration.
+            E = 0.5 * (np.sum(u1**2) + np.sum(u2**2)) - 0.5 * (x @ self.W1 @ rho_u1 + rho_u1 @ self.W2 @ rho_u2) - (np.sum(self.b1 * rho_u1) + np.sum(self.b2 * rho_u2))
+            C = 0.5 * np.sum((rho_u2 - y_true) ** 2)
+            F_0 = E  # beta == 0 here
+
+            # TODO: Summation over i == j should be excluded.
+            dE_du1 = -d_sigmoid(u1) * (x @ self.W1 + self.b1) + u1
+            u1 -= params['step_size'] * dE_du1
+            rho_u1 = sigmoid(u1)  # TODO: Use hard sigmoid.
+
+            dE_du2 = -d_sigmoid(u2) * (rho_u1 @ self.W2 + self.b2) + u2
+            u2 -= params['step_size'] * dE_du2  # beta == 0 here
+            rho_u2 = sigmoid(u2)  # TODO: Use hard sigmoid.
+
+            change_u1 = np.sum(np.abs(params['step_size'] * dE_du1))
+            change_u2 = np.sum(np.abs(params['step_size'] * dE_du2))
+
+            # Results: This settles to a fixed point (change_u1 and change_u2 decreases to 0) at a minimum of E (E decreases during the first few iterations, converges).
+
+        dF_0_dW1 = np.outer(x, rho_u1)
+        dF_0_dW2 = np.outer(rho_u1, rho_u2)
+
+        y_pred = rho_u2.copy()
+
+        averager.add('E_free', E)
+        averager.add('C_free', C)
+        #averager.add('F_0_free', F_0)
+
+
+        # Step 2, weakly clamped phase: Clamp y_true, relax to fixed point s_beta, collect derivative dF_beta_dW.
+        # TODO: Is it correct to start from free fixed point here?
+        # TODO: Use hard sigmoid and modified update rule, this is critical according to the paper.
+        for step in range(4):
+            # TODO: Summation over i == j should be excluded. Maybe just set the weights to 0 at each iteration.
+            E = 0.5 * (np.sum(u1 ** 2) + np.sum(u2 ** 2)) - 0.5 * (
+                        x @ self.W1 @ rho_u1 + rho_u1 @ self.W2 @ rho_u2) - (
+                            np.sum(self.b1 * rho_u1) + np.sum(self.b2 * rho_u2))
+            C = 0.5 * np.sum((rho_u2 - y_true) ** 2)
+            F_beta = E + params['beta'] * C
+
+            # TODO: Summation over i == j should be excluded.
+            dE_du1 = -d_sigmoid(u1) * (x @ self.W1 + self.b1) + u1
+            u1 -= params['step_size'] * dE_du1  # dC_du == 0 for hidden layer
+            rho_u1 = sigmoid(u1)  # TODO: Use hard sigmoid.
+
+            dE_du2 = -d_sigmoid(u2) * (rho_u1 @ self.W2 + self.b2) + u2
+            dC_du2 = rho_u2 - y_true
+            u2 -= params['step_size'] * (dE_du2 + params['beta'] * dC_du2)
+            rho_u2 = sigmoid(u2)  # TODO: Use hard sigmoid.
+
+            change_u1 = np.sum(np.abs(params['step_size'] * dE_du1))
+            change_u2 = np.sum(np.abs(params['step_size'] * (dE_du2 + params['beta'] * dC_du2)))
+
+            # Results: This settles to a fixed point (change_u2 is high initially, both change_u1 and change_u2 converge to 0)
+            #          at a new minimum of the energy (E converges) which is a bit higher compared to step 1.
+            #          The cost at this new fixed point is lower than at the original fixed point (C decreases and converges but doesn't go to 0, e.g. from 1.2 to 0.8).
+            #          PROBLEM: u1 doesn't change -> DO WE NEED RECURRENT CONNECTIONS SO THE ERROR PROPAGATES BACK???.
+            # TODO: Maybe add recurrent connections to hidden layer (via W1.T?).
+
+        dF_beta_dW1 = np.outer(x, rho_u1)
+        dF_beta_dW2 = np.outer(rho_u1, rho_u2)
+
+        averager.add('E_clamped', E)
+        averager.add('C_clamped', C)
+        #averager.add('F_beta_clamped', F_beta)
+
+
+        # Step 3: Update network weights according to the update rule.
+        # TODO: How to update bias?
+        # TODO: Or do plus here? Paper only says that this is proportional!
+        self.W1 -= params['lr'] / params['beta'] * (dF_beta_dW1 - dF_0_dW1)
+        self.W2 -= params['lr'] / params['beta'] * (dF_beta_dW2 - dF_0_dW2)
+
+
+        return y_pred
+

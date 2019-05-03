@@ -5,6 +5,7 @@ import collections
 import utils
 
 
+# TODO: Maybe turn this into a propper Logger/History class.
 class Averager:
     """Record different variables and compute their averages."""
 
