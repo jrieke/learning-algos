@@ -11,6 +11,14 @@ def d_sigmoid(x):
     return sigmoid(x) * (1 - sigmoid(x))
 
 
+def hard_sigmoid(x):
+    return np.clip(x, 0, 1)
+
+
+def d_hard_sigmoid(x):
+    return ((x >= 0) * (x <= 1)).astype(x.dtype)
+
+
 def mean_squared_error(y_pred, y_true):
     return np.mean((y_pred - y_true)**2)
 
@@ -266,14 +274,13 @@ class EquilibriumPropagationNet(BaseNet):
     def update(self, x, y_true, params, averager=None):
         u1 = np.random.randn(len(self.b1))
         u2 = np.random.randn(len(self.b2))
-        rho_u1 = sigmoid(u1)
-        rho_u2 = sigmoid(u2)
+        # TODO: Check if this also works with normal sigmoid.
+        rho_u1 = hard_sigmoid(u1)
+        rho_u2 = hard_sigmoid(u2)
 
         # Step 1, free phase: Clamp x, relax to fixed point s_0, collect derivative dF_dW.
-        # TODO: Use hard sigmoid and modified update rule, this is critical according to the paper.
+        # TODO: Use modified update rule for hard sigmoid, this is critical according to the paper.
         for step in range(20):
-
-            # TODO: Use hard sigmoid.
 
             # TODO: Summation over i == j should be excluded. Maybe just set the weights to 0 at each iteration.
             E = 0.5 * (np.sum(u1**2) + np.sum(u2**2)) - 0.5 * (x @ self.W1 @ rho_u1 + rho_u1 @ self.W2 @ rho_u2) - (np.sum(self.b1 * rho_u1) + np.sum(self.b2 * rho_u2))
@@ -281,13 +288,15 @@ class EquilibriumPropagationNet(BaseNet):
             F_0 = E  # beta == 0 here
 
             # TODO: Summation over i == j should be excluded.
-            dE_du1 = -d_sigmoid(u1) * (x @ self.W1 + self.b1) + u1
+            dE_du1 = -d_hard_sigmoid(u1) * (x @ self.W1 + self.b1) + u1
             u1 -= params['step_size'] * dE_du1
-            rho_u1 = sigmoid(u1)  # TODO: Use hard sigmoid.
+            u1 = np.clip(u1, 0, 1)  # this is required in combination with hard sigmoid, see equation 43 in Scellier & Bengio 2017
+            rho_u1 = hard_sigmoid(u1)
 
-            dE_du2 = -d_sigmoid(u2) * (rho_u1 @ self.W2 + self.b2) + u2
+            dE_du2 = -d_hard_sigmoid(u2) * (rho_u1 @ self.W2 + self.b2) + u2
             u2 -= params['step_size'] * dE_du2  # beta == 0 here
-            rho_u2 = sigmoid(u2)  # TODO: Use hard sigmoid.
+            u2 = np.clip(u2, 0, 1)
+            rho_u2 = hard_sigmoid(u2)
 
             change_u1 = np.sum(np.abs(params['step_size'] * dE_du1))
             change_u2 = np.sum(np.abs(params['step_size'] * dE_du2))
@@ -305,8 +314,8 @@ class EquilibriumPropagationNet(BaseNet):
 
 
         # Step 2, weakly clamped phase: Clamp y_true, relax to fixed point s_beta, collect derivative dF_beta_dW.
+        # TODO: Refactor this into a method settle(u1_init, u2_init, num_steps, beta)
         # TODO: Is it correct to start from free fixed point here?
-        # TODO: Use hard sigmoid and modified update rule, this is critical according to the paper.
         for step in range(4):
             # TODO: Summation over i == j should be excluded. Maybe just set the weights to 0 at each iteration.
             E = 0.5 * (np.sum(u1 ** 2) + np.sum(u2 ** 2)) - 0.5 * (
@@ -316,14 +325,16 @@ class EquilibriumPropagationNet(BaseNet):
             F_beta = E + params['beta'] * C
 
             # TODO: Summation over i == j should be excluded.
-            dE_du1 = -d_sigmoid(u1) * (x @ self.W1 + self.b1) + u1
+            dE_du1 = -d_hard_sigmoid(u1) * (x @ self.W1 + self.b1) + u1
             u1 -= params['step_size'] * dE_du1  # dC_du == 0 for hidden layer
-            rho_u1 = sigmoid(u1)  # TODO: Use hard sigmoid.
+            u1 = np.clip(u1, 0, 1)
+            rho_u1 = hard_sigmoid(u1)
 
-            dE_du2 = -d_sigmoid(u2) * (rho_u1 @ self.W2 + self.b2) + u2
+            dE_du2 = -d_hard_sigmoid(u2) * (rho_u1 @ self.W2 + self.b2) + u2
             dC_du2 = rho_u2 - y_true
             u2 -= params['step_size'] * (dE_du2 + params['beta'] * dC_du2)
-            rho_u2 = sigmoid(u2)  # TODO: Use hard sigmoid.
+            u2 = np.clip(u2, 0, 1)
+            rho_u2 = hard_sigmoid(u2)
 
             change_u1 = np.sum(np.abs(params['step_size'] * dE_du1))
             change_u2 = np.sum(np.abs(params['step_size'] * (dE_du2 + params['beta'] * dC_du2)))
