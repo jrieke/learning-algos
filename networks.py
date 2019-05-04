@@ -32,8 +32,7 @@ class BaseNet:
         self.b1 = np.random.randn(num_hidden)
         self.b2 = np.random.randn(10)
 
-
-    def forward(self, x):
+    def forward(self, x, params):
         # Hidden layer.
         z1 = x @ self.W1 + self.b1
         h1 = sigmoid(z1)
@@ -50,7 +49,7 @@ class FinalLayerUpdateNet(BaseNet):
 
     def update(self, x, y_true, params, averager=None):
         # Run forward pass.
-        z1, h1, z2, h2 = self.forward(x)
+        z1, h1, z2, h2 = self.forward(x, None)
 
         # Compute error for final layer (= gradient of cost w.r.t layer input).
         e2 = h2 - y_true  # gradient through cross entropy loss
@@ -71,7 +70,7 @@ class BackpropagationNet(BaseNet):
 
     def update(self, x, y_true, params, averager=None):
         # Run forward pass.
-        z1, h1, z2, h2 = self.forward(x)
+        z1, h1, z2, h2 = self.forward(x, None)
 
         # Compute errors for each layer (= gradient of cost w.r.t layer input).
         e2 = h2 - y_true  # gradient through cross entropy loss
@@ -102,7 +101,7 @@ class FeedbackAlignmentNet(BaseNet):
 
     def update(self, x, y_true, params, averager=None):
         # Run forward pass.
-        z1, h1, z2, h2 = self.forward(x)
+        z1, h1, z2, h2 = self.forward(x, None)
 
         # Compute errors for each layer (= gradient of cost w.r.t layer input).
         e2 = h2 - y_true  # gradient through cross entropy loss
@@ -135,7 +134,7 @@ class SignSymmetryNet(BaseNet):
 
     def update(self, x, y_true, params, averager=None):
         # Run forward pass.
-        z1, h1, z2, h2 = self.forward(x)
+        z1, h1, z2, h2 = self.forward(x, None)
 
         # Compute errors for each layer (= gradient of cost w.r.t layer input).
         e2 = h2 - y_true  # gradient through cross entropy loss
@@ -169,7 +168,7 @@ class WeightMirroringNet(BaseNet):
     def update(self, x, y_true, params, averager=None):
         # "Engaged mode": Forward pass on input image, backward pass to adapt forward weights.
         # Run forward pass.
-        z1, h1, z2, h2 = self.forward(x)
+        z1, h1, z2, h2 = self.forward(x, None)
 
         # Compute errors for each layer (= gradient of cost w.r.t layer input).
         e2 = h2 - y_true  # gradient through cross entropy loss
@@ -213,7 +212,7 @@ class TargetPropagationNet(BaseNet):
 
     def update(self, x, y_true, params, averager=None):
         # Run forward pass.
-        z1, h1, z2, h2 = self.forward(x)
+        z1, h1, z2, h2 = self.forward(x, None)
 
         # ---------- Phase 1: Compute targets and change feedforward weights. ----------
         # --------------------- (-> activations approximate targets) -------------------
@@ -275,104 +274,89 @@ class EquilibriumPropagationNet(BaseNet):
     # TODO: Initialize weights with Glorot.
     # TODO: Implement persistent particles.
     # TODO: Try 500 hidden neurons as in the paper.
-    # TODO: Implement mini-batching with batch size 20.
+    # TODO: Implement mini-batching with batch size 20, preferably via jax.
 
-    # TODO: Adapt the forward method, which is required for evaluation.
-    #       Interestingly, with the normal forward method and the weights trained via EP, the network achieves pretty good results,
-    #       even better than for the EP forward method ;)
-
-    def update(self, x, y_true, params, averager=None):
-        u1 = np.random.randn(len(self.b1))
-        u2 = np.random.randn(len(self.b2))
-        # TODO: With normal sigmoid, u1 and u2 settle nicely. With hard_sigmoid (as in the paper), they also settle but become binary (0 or 1 values). Which one is better?
-        rho_u1 = sigmoid(u1)
-        rho_u2 = sigmoid(u2)
-
-        # Step 1, free phase: Clamp x, relax to fixed point s_0, collect derivative dF_dW.
-        for step in range(20):
+    def settle(self, u1, u2, x, y_true, steps, step_size, beta):
+        for step in range(steps):
+            rho_u1 = sigmoid(u1)
+            rho_u2 = sigmoid(u2)
 
             E = 0.5 * (np.sum(u1**2) + np.sum(u2**2)) - 0.5 * (x @ self.W1 @ rho_u1 + rho_u1 @ self.W2 @ rho_u2 + rho_u2 @ self.W2.T @ rho_u1) - (np.sum(self.b1 * rho_u1) + np.sum(self.b2 * rho_u2))
-            C = 0.5 * np.sum((rho_u2 - y_true) ** 2)
-            F_0 = E  # beta == 0 here
+            C = 0.5 * np.sum((rho_u2 - y_true) ** 2)  # TODO: Maybe omit this calculation if beta == 0. Check if this increases performance.
+            F = E + beta * C
 
             u1_old, u2_old = u1.copy(), u2.copy()
 
             dE_du1 = -d_sigmoid(u1) * (x @ self.W1 + rho_u2 @ self.W2.T + self.b1) + u1
-            u1 -= params['step_size'] * dE_du1
+            u1 -= step_size * dE_du1
             #u1 = np.clip(u1, 0, 1)  # critical in combination with hard sigmoid, see equation 43 in Scellier & Bengio 2017
-            rho_u1 = sigmoid(u1)
 
             dE_du2 = -d_sigmoid(u2) * (rho_u1 @ self.W2 + self.b2) + u2
-            u2 -= params['step_size'] * dE_du2  # beta == 0 here
+            dC_du2 = rho_u2 - y_true  # TODO: Maybe omit this calculation if beta == 0. Check if this increases performance.
+            u2 -= step_size * (dE_du2 + beta * dC_du2)
             #u2 = np.clip(u2, 0, 1)
-            rho_u2 = sigmoid(u2)
 
             change_u1 = np.sum(np.abs(u1 - u1_old))
             change_u2 = np.sum(np.abs(u2 - u2_old))
 
-            # Results: This settles to a fixed point (change_u1 and change_u2 decreases to 0) at a minimum of E (E decreases during the first few iterations, converges).
-            #          Verified this with recurrent connection.
-            #          With hard_sigmoid, u1 and u2 also settle, but become binary vectors (0 or 1 values).
+        return u1, u2, E, C, F
 
+    # Interestingly, with the forward method of a standard MLP, this also achieves pretty good results, even a bit better than for the continuous forward method ;)
+    def forward(self, x, params):
+        u1 = np.random.randn(len(self.b1))
+        u2 = np.random.randn(len(self.b2))
+
+        u1, u2, E_0, C_0, F_0 = self.settle(u1, u2, x, 0, params['steps_free'], params['step_size'], beta=0)
+
+        return sigmoid(u2)
+
+    def update(self, x, y_true, params, averager=None):
+
+        # TODO: With normal sigmoid, u1 and u2 settle nicely. With hard_sigmoid (as in the paper), they also settle but become binary (0 or 1 values). Which one is better?
+        u1 = np.random.randn(len(self.b1))
+        u2 = np.random.randn(len(self.b2))
+
+
+        # Step 1, free phase: Clamp x, relax to fixed point, collect prediction and derivative dF_dW.
+        u1, u2, E_0, C_0, F_0 = self.settle(u1, u2, x, y_true, params['steps_free'], params['step_size'], beta=0)
+
+        rho_u1 = sigmoid(u1)
+        rho_u2 = sigmoid(u2)
+
+        y_pred = rho_u2.copy()  # return this later
 
         dF_0_dW1 = np.outer(x, rho_u1)
         dF_0_dW2 = np.outer(rho_u1, rho_u2)
 
-        y_pred = rho_u2.copy()
+        averager.add('E_0', E_0)
+        averager.add('C_0', C_0)
 
-        averager.add('E_free', E)
-        averager.add('C_free', C)
-        #averager.add('F_0_free', F_0)
+        # Results: This settles to a fixed point (change_u1 and change_u2 decreases to 0) at a minimum of E (E decreases during the first few iterations, converges).
+        #          Didn't test hard sigmoid with the new implementation yet.
 
 
         # Step 2, weakly clamped phase: Clamp y_true, relax to fixed point s_beta, collect derivative dF_beta_dW.
-        # TODO: Refactor this into a method settle(u1_init, u2_init, num_steps, beta)
-        # TODO: Is it correct to start from free fixed point here?
+        beta = np.random.choice([-1, 1]) * params['beta']  # choose sign of beta at random for the 2nd phase, this helps learning according to the paper
+        u1, u2, E_beta, C_beta, F_beta = self.settle(u1, u2, x, y_true, params['steps_clamped'], params['step_size'], beta=beta)
 
-        sign_beta = np.random.choice([-1, 1])  # choose sign of beta at random for the 2nd phase, this helps learning
-
-        # TODO: Maybe try more iterations initially.
-        for step in range(4):
-            E = 0.5 * (np.sum(u1 ** 2) + np.sum(u2 ** 2)) - 0.5 * (x @ self.W1 @ rho_u1 + rho_u1 @ self.W2 @ rho_u2 + rho_u2 @ self.W2.T @ rho_u1) - (np.sum(self.b1 * rho_u1) + np.sum(self.b2 * rho_u2))
-            C = 0.5 * np.sum((rho_u2 - y_true) ** 2)
-            # TODO: Choose sign of beta at random.
-            F_beta = E + sign_beta * params['beta'] * C
-
-            u1_old, u2_old = u1.copy(), u2.copy()
-
-            dE_du1 = -d_sigmoid(u1) * (x @ self.W1 + rho_u2 @ self.W2.T + self.b1) + u1
-            u1 -= params['step_size'] * dE_du1  # dC_du == 0 for hidden layer
-            #u1 = np.clip(u1, 0, 1)
-            rho_u1 = sigmoid(u1)
-
-            dE_du2 = -d_sigmoid(u2) * (rho_u1 @ self.W2 + self.b2) + u2
-            dC_du2 = rho_u2 - y_true
-            u2 -= params['step_size'] * (dE_du2 + sign_beta * params['beta'] * dC_du2)
-            #u2 = np.clip(u2, 0, 1)
-            rho_u2 = sigmoid(u2)
-
-            change_u1 = np.sum(np.abs(u1 - u1_old))
-            change_u2 = np.sum(np.abs(u2 - u2_old))
-
-            # Results: This settles to a fixed point (change_u2 is high initially, both change_u1 and change_u2 decrease, but do not completely converge within the 4 iterations)
-            #          at a new minimum of the energy (E converges) which is a bit higher compared to step 1.
-            #          The cost at this new fixed point is lower than at the original fixed point (C decreases and converges but doesn't go to 0, e.g. from 1.2 to 0.8).
-            #          With recurrent connection, also change_u2 is high starting from the 2nd iteration.
+        rho_u1 = sigmoid(u1)
+        rho_u2 = sigmoid(u2)
 
         dF_beta_dW1 = np.outer(x, rho_u1)
         dF_beta_dW2 = np.outer(rho_u1, rho_u2)
         # TODO: In principle, this would need another gradient for the recurrent connection, which would be the same as dF_dW2.T though.
 
-        averager.add('E_clamped', E)
-        averager.add('C_clamped', C)
-        #averager.add('F_beta_clamped', F_beta)
+        averager.add('E_beta', E_beta)
+        averager.add('C_beta', C_beta)
+
+        # Results: This settles to a fixed point (change_u2 is high from the beginning, change_u2 becomes high at 2nd iteration, both change_u1 and change_u2 decrease, but do not completely converge within the 4 iterations)
+        #          at a new minimum of the energy (E converges) which is a bit higher compared to step 1.
+        #          The cost at this new fixed point is lower than at the original fixed point (C decreases and converges but doesn't go to 0, e.g. from 1.2 to 0.8).
 
 
         # Step 3: Update network weights according to the update rule.
         # TODO: How to update bias?
-        self.W1 += params['lr1'] / (sign_beta * params['beta']) * (dF_beta_dW1 - dF_0_dW1)
-        self.W2 += params['lr2'] / (sign_beta * params['beta']) * (dF_beta_dW2 - dF_0_dW2)
-
+        self.W1 += params['lr1'] / beta * (dF_beta_dW1 - dF_0_dW1)
+        self.W2 += params['lr2'] / beta * (dF_beta_dW2 - dF_0_dW2)
 
         return y_pred
-

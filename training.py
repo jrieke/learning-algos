@@ -3,6 +3,7 @@ import random
 import mnist_loader
 import collections
 import utils
+import time
 
 
 # TODO: Maybe turn this into a propper Logger/History class.
@@ -28,13 +29,13 @@ def cross_entropy(y_pred, true_label):
     return -np.log(y_pred[true_label])
 
 
-def evaluate(net, evaluation_data):
+def evaluate(net, evaluation_data, params):
     """Evaluate the network on the evaluation_data."""
     averager = Averager()
     for i_sample, (x, y_true) in enumerate(evaluation_data):
         x = x.flatten()
         y_true = y_true.flatten()
-        _, _, _, y_pred = net.forward(x)
+        _, _, _, y_pred = net.forward(x, params)
 
         true_label = y_true[0]  # target values in validation_data are labels (in training_data they are one-hot vectors)
         averager.add('loss', cross_entropy(y_pred, true_label))
@@ -47,6 +48,7 @@ def train_epoch(net, training_data, params):
     """Train the network for one epoch on the training_data."""
     random.shuffle(training_data)
     averager = Averager()
+    start_time = time.time()
     for i_sample, (x, y_true) in enumerate(training_data):
         x = x.flatten()
         y_true = y_true.flatten()
@@ -60,6 +62,7 @@ def train_epoch(net, training_data, params):
         if i_sample % 5000 == 1:
             print(f'{i_sample} / {len(training_data)} samples - {averager}')
 
+    print('Took {:.0f} seconds'.format(time.time() - start_time))
     print('Train set average:\t', averager)
 
 
@@ -70,7 +73,7 @@ def train(net, params, num_epochs=20):
     for epoch in range(num_epochs):
         print('Epoch', epoch + 1)
         train_epoch(net, training_data, params)
-        evaluate(net, validation_data)
+        evaluate(net, validation_data, params)
         print('-' * 80)
         print()
 
