@@ -32,7 +32,7 @@ class BaseNet:
         self.b1 = np.random.randn(num_hidden)
         self.b2 = np.random.randn(10)
 
-    def forward(self, x, params):
+    def forward(self, x, params, return_activations=False):
         # Hidden layer.
         z1 = x @ self.W1 + self.b1
         h1 = sigmoid(z1)
@@ -41,7 +41,10 @@ class BaseNet:
         z2 = h1 @ self.W2 + self.b2
         h2 = sigmoid(z2)
 
-        return z1, h1, z2, h2
+        if return_activations:
+            return z1, h1, z2, h2
+        else:
+            return h2
 
 
 class FinalLayerUpdateNet(BaseNet):
@@ -49,7 +52,7 @@ class FinalLayerUpdateNet(BaseNet):
 
     def update(self, x, y_true, params, averager=None):
         # Run forward pass.
-        z1, h1, z2, h2 = self.forward(x, None)
+        z1, h1, z2, h2 = self.forward(x, params, return_activations=True)
 
         # Compute error for final layer (= gradient of cost w.r.t layer input).
         e2 = h2 - y_true  # gradient through cross entropy loss
@@ -70,7 +73,7 @@ class BackpropagationNet(BaseNet):
 
     def update(self, x, y_true, params, averager=None):
         # Run forward pass.
-        z1, h1, z2, h2 = self.forward(x, None)
+        z1, h1, z2, h2 = self.forward(x, params, return_activations=True)
 
         # Compute errors for each layer (= gradient of cost w.r.t layer input).
         e2 = h2 - y_true  # gradient through cross entropy loss
@@ -101,7 +104,7 @@ class FeedbackAlignmentNet(BaseNet):
 
     def update(self, x, y_true, params, averager=None):
         # Run forward pass.
-        z1, h1, z2, h2 = self.forward(x, None)
+        z1, h1, z2, h2 = self.forward(x, params, return_activations=True)
 
         # Compute errors for each layer (= gradient of cost w.r.t layer input).
         e2 = h2 - y_true  # gradient through cross entropy loss
@@ -134,7 +137,7 @@ class SignSymmetryNet(BaseNet):
 
     def update(self, x, y_true, params, averager=None):
         # Run forward pass.
-        z1, h1, z2, h2 = self.forward(x, None)
+        z1, h1, z2, h2 = self.forward(x, params, return_activations=True)
 
         # Compute errors for each layer (= gradient of cost w.r.t layer input).
         e2 = h2 - y_true  # gradient through cross entropy loss
@@ -168,7 +171,7 @@ class WeightMirroringNet(BaseNet):
     def update(self, x, y_true, params, averager=None):
         # "Engaged mode": Forward pass on input image, backward pass to adapt forward weights.
         # Run forward pass.
-        z1, h1, z2, h2 = self.forward(x, None)
+        z1, h1, z2, h2 = self.forward(x, params, return_activations=True)
 
         # Compute errors for each layer (= gradient of cost w.r.t layer input).
         e2 = h2 - y_true  # gradient through cross entropy loss
@@ -212,7 +215,7 @@ class TargetPropagationNet(BaseNet):
 
     def update(self, x, y_true, params, averager=None):
         # Run forward pass.
-        z1, h1, z2, h2 = self.forward(x, None)
+        z1, h1, z2, h2 = self.forward(x, params, return_activations=True)
 
         # ---------- Phase 1: Compute targets and change feedforward weights. ----------
         # --------------------- (-> activations approximate targets) -------------------
@@ -269,12 +272,15 @@ class EquilibriumPropagationNet(BaseNet):
     A continuous net with equilibrium propagation updates (Scellier & Bengio 2017).
 
     Note that there is an explicit recurrent connection between output and hidden layer with weight self.W2.T.
-    """
 
-    # TODO: Initialize weights with Glorot.
-    # TODO: Implement persistent particles.
-    # TODO: Try 500 hidden neurons as in the paper.
-    # TODO: Implement mini-batching with batch size 20, preferably via jax.
+    # TODO
+    Differences to paper:
+    - 30 instead of 500 hidden neurons
+    - weight initialization via np.random.randn instead of Glorot
+    - no persistent particles
+    - no mini-batching with batch size 20, implement this via jax
+    - sigmoid instead of hard-sigmoid (+clipping of u). With hard sigmoid, u1 and u2 also settle but they become binary. CHECK AGAIN IF THIS ALSO TRAINS PROPERLY.
+    """
 
     def settle(self, u1, u2, x, y_true, steps, step_size, beta):
         for step in range(steps):
@@ -302,6 +308,7 @@ class EquilibriumPropagationNet(BaseNet):
         return u1, u2, E, C, F
 
     # Interestingly, with the forward method of a standard MLP, this also achieves pretty good results, even a bit better than for the continuous forward method ;)
+    # TODO: Refactor this and base method.
     def forward(self, x, params):
         u1 = np.random.randn(len(self.b1))
         u2 = np.random.randn(len(self.b2))
@@ -312,7 +319,6 @@ class EquilibriumPropagationNet(BaseNet):
 
     def update(self, x, y_true, params, averager=None):
 
-        # TODO: With normal sigmoid, u1 and u2 settle nicely. With hard_sigmoid (as in the paper), they also settle but become binary (0 or 1 values). Which one is better?
         u1 = np.random.randn(len(self.b1))
         u2 = np.random.randn(len(self.b2))
 
@@ -327,6 +333,8 @@ class EquilibriumPropagationNet(BaseNet):
 
         dF_0_dW1 = np.outer(x, rho_u1)
         dF_0_dW2 = np.outer(rho_u1, rho_u2)
+        dF_0_db1 = rho_u1.copy()
+        dF_0_db2 = rho_u2.copy()
 
         averager.add('E_0', E_0)
         averager.add('C_0', C_0)
@@ -345,6 +353,8 @@ class EquilibriumPropagationNet(BaseNet):
         dF_beta_dW1 = np.outer(x, rho_u1)
         dF_beta_dW2 = np.outer(rho_u1, rho_u2)
         # TODO: In principle, this would need another gradient for the recurrent connection, which would be the same as dF_dW2.T though.
+        dF_beta_db1 = rho_u1.copy()
+        dF_beta_db2 = rho_u2.copy()
 
         averager.add('E_beta', E_beta)
         averager.add('C_beta', C_beta)
@@ -355,8 +365,11 @@ class EquilibriumPropagationNet(BaseNet):
 
 
         # Step 3: Update network weights according to the update rule.
-        # TODO: How to update bias?
-        self.W1 += params['lr1'] / beta * (dF_beta_dW1 - dF_0_dW1)
-        self.W2 += params['lr2'] / beta * (dF_beta_dW2 - dF_0_dW2)
+        self.W1 += params['lr1'] / beta * (dF_beta_dW1 - dF_0_dW1)  # TODO: Maybe do this *0,5 to make it more similar to theory.
+        self.W2 += params['lr2'] / beta * (dF_beta_dW2 - dF_0_dW2)  # TODO: This could stay like it is though to incorporate the recurrent connection.
+
+        # TODO: Should be correct according to theory. Check that this in fact improves implementation. Seed everything before.
+        self.b1 += params['lr1'] / beta * (dF_beta_db1 - dF_0_db1)
+        self.b2 += params['lr2'] / beta * (dF_beta_db2 - dF_0_db2)
 
         return y_pred

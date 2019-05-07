@@ -35,7 +35,7 @@ def evaluate(net, evaluation_data, params):
     for i_sample, (x, y_true) in enumerate(evaluation_data):
         x = x.flatten()
         y_true = y_true.flatten()
-        _, _, _, y_pred = net.forward(x, params)
+        y_pred = net.forward(x, params)
 
         true_label = y_true[0]  # target values in validation_data are labels (in training_data they are one-hot vectors)
         averager.add('loss', cross_entropy(y_pred, true_label))
