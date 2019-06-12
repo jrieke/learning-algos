@@ -5,6 +5,7 @@ import scipy.special
 import utils
 import torch
 import torch.nn as nn
+import torch.nn.functional  # TODO: Import this as F and rename F variables below.
 
 
 class EquilibriumPropagationNet(nn.Module):
@@ -23,6 +24,7 @@ class EquilibriumPropagationNet(nn.Module):
     """
 
     def __init__(self, num_hidden=30):
+        super().__init__()
         self.W1 = nn.Parameter(torch.Tensor(784, num_hidden))
         self.W2 = nn.Parameter(torch.Tensor(num_hidden, 10))
         self.b1 = nn.Parameter(torch.Tensor(num_hidden))
@@ -34,6 +36,20 @@ class EquilibriumPropagationNet(nn.Module):
         nn.init.normal_(self.b1)
         nn.init.normal_(self.b2)
 
+    def energies(self, u1, u2, x, y_true, beta):
+        rho_u1 = torch.sigmoid(u1)
+        rho_u2 = torch.sigmoid(u2)
+
+        # TODO: Check that matmul stuff with @ operator works.
+        E = 0.5 * (torch.sum(u1 ** 2) + torch.sum(u2 ** 2)) - 0.5 * (
+                    x @ self.W1 @ rho_u1 + rho_u1 @ self.W2 @ rho_u2 + rho_u2 @ self.W2.t() @ rho_u1) - (
+                        torch.sum(self.b1 * rho_u1) + torch.sum(self.b2 * rho_u2))
+        C = 0.5 * torch.sum((
+                                        rho_u2 - y_true) ** 2)  # TODO: Maybe omit this calculation if beta == 0. Check if this increases performance.
+        F = E + beta * C
+
+        return E, C, F
+
     def settle(self, u1, u2, x, y_true, steps, step_size, beta):
 
         # TODO: Store the requires_grad states here and restore them later, so we can set weights to non-trainable.
@@ -43,15 +59,9 @@ class EquilibriumPropagationNet(nn.Module):
         u2.requires_grad = True
 
         for step in range(steps):
-            rho_u1 = nn.Sigmoid(u1)
-            rho_u2 = nn.Sigmoid(u2)
+            E, C, F = self.energies(u1, u2, x, y_true, beta)
 
-            # TODO: Check that matmul stuff with @ operator works.
-            E = 0.5 * (torch.sum(u1**2) + torch.sum(u2**2)) - 0.5 * (x @ self.W1 @ rho_u1 + rho_u1 @ self.W2 @ rho_u2 + rho_u2 @ self.W2.T @ rho_u1) - (torch.sum(self.b1 * rho_u1) + torch.sum(self.b2 * rho_u2))
-            C = 0.5 * torch.sum((rho_u2 - y_true) ** 2)  # TODO: Maybe omit this calculation if beta == 0. Check if this increases performance.
-            F = E + beta * C
-
-            u1_old, u2_old = torch.Tensor(u1), torch.Tensor(u2)
+            #u1_old, u2_old = u1.clone().detach(), u2.clone().detach()
 
             # dE_du1 = -d_sigmoid(u1) * (x @ self.W1 + rho_u2 @ self.W2.T + self.b1) + u1
             # u1 -= step_size * dE_du1
@@ -63,54 +73,60 @@ class EquilibriumPropagationNet(nn.Module):
             #u2 = np.clip(u2, 0, 1)
 
             F.backward()
-            u1 -= step_size * u1.grad
-            u2 -= step_size * u2.grad
+            u1.data.sub_(step_size * u1.grad)
+            u2.data.sub_(step_size * u2.grad)
             u1.grad.zero_()
             u2.grad.zero_()
 
-            change_u1 = torch.sum(torch.abs(u1 - u1_old))
-            change_u2 = torch.sum(torch.abs(u2 - u2_old))
+            #change_u1 = torch.sum(torch.abs(u1 - u1_old))
+            #change_u2 = torch.sum(torch.abs(u2 - u2_old))
 
         u1.requires_grad = False
         u2.requires_grad = False
         for p in self.parameters():
             p.requires_grad = True
 
-        return u1, u2, E, C, F
+        return u1, u2
 
     # Interestingly, with the forward method of a standard MLP, this also achieves pretty good results, even a bit better than for the continuous forward method ;)
     # TODO: Refactor this and base method.
     def forward(self, x, params):
         # TODO: Do this in training loop.
-        x = torch.from_numpy(x)
+        x = torch.FloatTensor(x)
 
         u1 = torch.randn(len(self.b1))
         u2 = torch.randn(len(self.b2))
 
-        u1, u2, E_0, C_0, F_0 = self.settle(u1, u2, x, 0, params['steps_free'], params['step_size'], beta=0)
+        u1, u2 = self.settle(u1, u2, x, 0, params['steps_free'], params['step_size'], beta=0)
 
-        rho_u2 = nn.Sigmoid(u2)
-        y_pred = rho_u2.clone().detach().numpy()
-        return y_pred
+        rho_u2 = torch.sigmoid(u2)
+        y_pred = rho_u2.clone().detach()
+        return y_pred.numpy()
 
     def update(self, x, y_true, params, averager=None):
         u1 = torch.randn(len(self.b1))
         u2 = torch.randn(len(self.b2))
 
         # TODO: Do this in training loop.
-        x = torch.from_numpy(x)
-        y_true = torch.from_numpy(y_true)
+        x = torch.FloatTensor(x)
+        y_true = torch.FloatTensor(y_true)
 
 
         # Step 1, free phase: Clamp x, relax to fixed point, collect prediction and derivative dF_dW.
-        u1, u2, E_0, C_0, F_0 = self.settle(u1, u2, x, y_true, params['steps_free'], params['step_size'], beta=0)
+        u1, u2 = self.settle(u1, u2, x, y_true, params['steps_free'], params['step_size'], beta=0)
 
-        rho_u2 = nn.Sigmoid(u2)
-        y_pred = rho_u2.clone().detach().numpy()  # return this later
+        # Store network output as prediction, will be returned later.
+        rho_u2 = torch.sigmoid(u2)
+        y_pred = rho_u2.clone().detach()
 
+        # Compute energies at free fixed point.
+        E_0, C_0, F_0 = self.energies(u1, u2, x, y_true, beta=0)
+
+        # Compute gradients of F_0 w.r.t. the network parameters.
+        # TODO: Make sure that grads are zero here, maybe reset before the backward pass.
         F_0.backward()
-        # TODO: Store gradients w.r.t. parameters, either in grad fields or outside.
-
+        gradients_0 = [p.grad.clone().detach() for p in self.parameters()]  # TODO: Not sure if detach() is needed here.
+        self.zero_grad()
 
         averager.add('E_0', E_0.item())
         averager.add('C_0', C_0.item())
@@ -121,10 +137,15 @@ class EquilibriumPropagationNet(nn.Module):
 
         # Step 2, weakly clamped phase: Clamp y_true, relax to fixed point s_beta, collect derivative dF_beta_dW.
         beta = random.choice([-1, 1]) * params['beta']  # choose sign of beta at random for the 2nd phase, this helps learning according to the paper
-        u1, u2, E_beta, C_beta, F_beta = self.settle(u1, u2, x, y_true, params['steps_clamped'], params['step_size'], beta=beta)
+        u1, u2 = self.settle(u1, u2, x, y_true, params['steps_clamped'], params['step_size'], beta=beta)
 
+        # Compute energies at weakly clamped fixed point.
+        E_beta, C_beta, F_beta = self.energies(u1, u2, x, y_true, beta=0)
+
+        # Compute gradients of F_beta w.r.t. the network parameters.
         F_beta.backward()
-        # TODO: Store gradients w.r.t. parameters, either in grad fields or outside.
+        gradients_beta = [p.grad.clone().detach() for p in self.parameters()]  # TODO: Not sure if detach() is needed here.
+        self.zero_grad()
 
         averager.add('E_beta', E_beta.item())
         averager.add('C_beta', C_beta.item())
@@ -135,11 +156,14 @@ class EquilibriumPropagationNet(nn.Module):
 
 
         # Step 3: Update network weights according to the update rule.
-        self.W1 += params['lr1'] / beta * (dF_beta_dW1 - dF_0_dW1)  # TODO: Maybe do this *0,5 to make it more similar to theory.
-        self.W2 += params['lr2'] / beta * (dF_beta_dW2 - dF_0_dW2)  # TODO: This could stay like it is though to incorporate the recurrent connection.
+        # self.W1 += params['lr1'] / beta * (dF_beta_dW1 - dF_0_dW1)  # TODO: Maybe do this *0,5 to make it more similar to theory.
+        # self.W2 += params['lr2'] / beta * (dF_beta_dW2 - dF_0_dW2)  # TODO: This could stay like it is though to incorporate the recurrent connection.
+        #
+        # # TODO: Should be correct according to theory. Check that this in fact improves implementation. Seed everything before.
+        # self.b1 += params['lr1'] / beta * (dF_beta_db1 - dF_0_db1)
+        # self.b2 += params['lr2'] / beta * (dF_beta_db2 - dF_0_db2)
+        for p, gradient_0, gradient_beta in zip(self.parameters(), gradients_0, gradients_beta):
+            p.data.sub_(params['lr1'] / beta * (gradient_beta - gradient_0))  # TODO: Implement different learning rates.
 
-        # TODO: Should be correct according to theory. Check that this in fact improves implementation. Seed everything before.
-        self.b1 += params['lr1'] / beta * (dF_beta_db1 - dF_0_db1)
-        self.b2 += params['lr2'] / beta * (dF_beta_db2 - dF_0_db2)
 
-        return y_pred
+        return y_pred.numpy()

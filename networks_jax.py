@@ -1,11 +1,25 @@
-import numpy as np
+import jax.random
+import jax.numpy as np
+from jax import jit
+import random
 import scipy as sp
 import scipy.special
 import utils
 
+import numpy as onp
+
+
+key = jax.random.PRNGKey(0)
+
+
+def random_normal(*size):
+    return jax.random.normal(key, size)
+    #return onp.random.randn(*size)
+
 
 sigmoid = sp.special.expit
-
+#def sigmoid(x):
+#    return 1 / (1 + np.exp(-x))
 
 def d_sigmoid(x):
     return sigmoid(x) * (1 - sigmoid(x))
@@ -27,18 +41,18 @@ class BaseNet:
     """A basic feedforward net for MNIST with one hidden layer."""
 
     def __init__(self, num_hidden=30):
-        self.W1 = np.random.randn(784, num_hidden)
-        self.W2 = np.random.randn(num_hidden, 10)
-        self.b1 = np.random.randn(num_hidden)
-        self.b2 = np.random.randn(10)
+        self.W1 = random_normal(784, num_hidden)
+        self.W2 = random_normal(num_hidden, 10)
+        self.b1 = random_normal(num_hidden)
+        self.b2 = random_normal(10)
 
     def forward(self, x, params, return_activations=False):
         # Hidden layer.
-        z1 = x @ self.W1 + self.b1
+        z1 = np.matmul(x, self.W1) + self.b1
         h1 = sigmoid(z1)
 
         # Output layer.
-        z2 = h1 @ self.W2 + self.b2
+        z2 = np.matmul(h1, self.W2) + self.b2
         h2 = sigmoid(z2)
 
         if return_activations:
@@ -99,8 +113,8 @@ class FeedbackAlignmentNet(BaseNet):
 
     def __init__(self, num_hidden=30):
         super().__init__(num_hidden)
-        self.V2 = np.random.randn(10, num_hidden)  # explicit feedback connections
-        self.c2 = np.random.randn(num_hidden)
+        self.V2 = random_normal(10, num_hidden)  # explicit feedback connections
+        self.c2 = random_normal(num_hidden)
 
     def update(self, x, y_true, params, averager=None):
         # Run forward pass.
@@ -132,8 +146,8 @@ class SignSymmetryNet(BaseNet):
 
     def __init__(self, num_hidden=30):
         super().__init__(num_hidden)
-        self.V2 = np.random.randn(10, num_hidden)  # explicit feedback connections
-        self.c2 = np.random.randn(num_hidden)
+        self.V2 = random_normal(10, num_hidden)  # explicit feedback connections
+        self.c2 = random_normal(num_hidden)
 
     def update(self, x, y_true, params, averager=None):
         # Run forward pass.
@@ -165,8 +179,8 @@ class WeightMirroringNet(BaseNet):
 
     def __init__(self, num_hidden=30):
         super().__init__(num_hidden)
-        self.V2 = np.random.randn(10, num_hidden)  # explicit feedback connections
-        self.c2 = np.random.randn(num_hidden)
+        self.V2 = random_normal(10, num_hidden)  # explicit feedback connections
+        self.c2 = random_normal(num_hidden)
 
     def update(self, x, y_true, params, averager=None):
         # "Engaged mode": Forward pass on input image, backward pass to adapt forward weights.
@@ -198,7 +212,7 @@ class WeightMirroringNet(BaseNet):
         return h2
 
     def update_weight_mirror(self, params):
-        x2_noise = np.random.randn(self.W2.shape[0])
+        x2_noise = random_normal(self.W2.shape[0])
         h2_noise = sigmoid(x2_noise @ self.W2 + self.b2)
         self.V2 += params['lr_backward'] * np.outer(h2_noise, x2_noise) - params['lr_backward'] * params[
             'weight_decay_backward'] * self.V2
@@ -210,8 +224,8 @@ class TargetPropagationNet(BaseNet):
 
     def __init__(self, num_hidden=30):
         super().__init__(num_hidden)
-        self.V2 = np.random.randn(10, num_hidden)  # explicit feedback connections
-        self.c2 = np.random.randn(num_hidden)
+        self.V2 = random_normal(10, num_hidden)  # explicit feedback connections
+        self.c2 = random_normal(num_hidden)
 
     def update(self, x, y_true, params, averager=None):
         # Run forward pass.
@@ -310,8 +324,8 @@ class EquilibriumPropagationNet(BaseNet):
     # Interestingly, with the forward method of a standard MLP, this also achieves pretty good results, even a bit better than for the continuous forward method ;)
     # TODO: Refactor this and base method.
     def forward(self, x, params):
-        u1 = np.random.randn(len(self.b1))
-        u2 = np.random.randn(len(self.b2))
+        u1 = random_normal(len(self.b1))
+        u2 = random_normal(len(self.b2))
 
         u1, u2, E_0, C_0, F_0 = self.settle(u1, u2, x, 0, params['steps_free'], params['step_size'], beta=0)
 
@@ -319,8 +333,8 @@ class EquilibriumPropagationNet(BaseNet):
 
     def update(self, x, y_true, params, averager=None):
 
-        u1 = np.random.randn(len(self.b1))
-        u2 = np.random.randn(len(self.b2))
+        u1 = random_normal(len(self.b1))
+        u2 = random_normal(len(self.b2))
 
 
         # Step 1, free phase: Clamp x, relax to fixed point, collect prediction and derivative dF_dW.
@@ -344,7 +358,7 @@ class EquilibriumPropagationNet(BaseNet):
 
 
         # Step 2, weakly clamped phase: Clamp y_true, relax to fixed point s_beta, collect derivative dF_beta_dW.
-        beta = np.random.choice([-1, 1]) * params['beta']  # choose sign of beta at random for the 2nd phase, this helps learning according to the paper
+        beta = random.choice([-1, 1]) * params['beta']  # choose sign of beta at random for the 2nd phase, this helps learning according to the paper
         u1, u2, E_beta, C_beta, F_beta = self.settle(u1, u2, x, y_true, params['steps_clamped'], params['step_size'], beta=beta)
 
         rho_u1 = sigmoid(u1)
