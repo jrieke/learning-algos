@@ -1,4 +1,4 @@
-import numpy as np
+import jax.numpy as np
 import random
 import mnist_loader
 import collections
@@ -6,23 +6,7 @@ import utils
 import time
 
 
-# TODO: Maybe turn this into a propper Logger/History class.
-class Averager:
-    """Record different variables and compute their averages."""
 
-    def __init__(self):
-        self.summed_values = collections.defaultdict(lambda: 0)
-        self.counts = collections.defaultdict(lambda: 0)
-
-    def add(self, name, value):
-        self.summed_values[name] += value
-        self.counts[name] += 1
-
-    def get(self):
-        return {name: self.summed_values[name] / self.counts[name] for name in self.summed_values}
-
-    def __str__(self):
-        return ' - '.join(f'{k}: {v:.3f}' for k, v in self.get().items())
 
 
 def cross_entropy(y_pred, true_label):
@@ -31,7 +15,7 @@ def cross_entropy(y_pred, true_label):
 
 def evaluate(net, evaluation_data, params):
     """Evaluate the network on the evaluation_data."""
-    averager = Averager()
+    averager = utils.Averager()
     for i_sample, (x, y_true) in enumerate(evaluation_data):
         x = x.flatten()
         y_true = y_true.flatten()
@@ -47,7 +31,7 @@ def evaluate(net, evaluation_data, params):
 def train_epoch(net, training_data, params):
     """Train the network for one epoch on the training_data."""
     random.shuffle(training_data)
-    averager = Averager()
+    averager = utils.Averager()
     start_time = time.time()
     for i_sample, (x, y_true) in enumerate(training_data):
         x = x.flatten()
@@ -59,10 +43,10 @@ def train_epoch(net, training_data, params):
         averager.add('loss', cross_entropy(y_pred, true_label))
         averager.add('acc', true_label == y_pred.argmax())
 
-        if i_sample % 5000 == 1:
-            print(f'{i_sample} / {len(training_data)} samples - {averager}')
+        if i_sample % 1000 == 0:
+            print(f'{i_sample} / {len(training_data)} samples ({time.time()-start_time:.0f} s) - {averager}')
 
-    print('Took {:.0f} seconds'.format(time.time() - start_time))
+    print('Took {:.0f} seconds'.format(time.time()-start_time))
     print('Train set average:\t', averager)
 
 

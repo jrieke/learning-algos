@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import collections
 
 
 def unit_vector(vector):
@@ -20,3 +21,22 @@ def plot_multiple(*arrays_and_labels):
         plt.plot(arr, label=lab)
     plt.legend()
     plt.show()
+
+
+# TODO: Maybe turn this into a propper Logger/History class.
+class Averager:
+    """Record different variables and compute their averages."""
+
+    def __init__(self):
+        self.summed_values = collections.defaultdict(lambda: 0)
+        self.counts = collections.defaultdict(lambda: 0)
+
+    def add(self, name, value):
+        self.summed_values[name] += value
+        self.counts[name] += 1
+
+    def get(self):
+        return {name: self.summed_values[name] / self.counts[name] for name in self.summed_values}
+
+    def __str__(self):
+        return ' - '.join(f'{k}: {v:.3f}' for k, v in self.get().items())
