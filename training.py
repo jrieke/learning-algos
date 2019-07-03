@@ -1,12 +1,9 @@
-import jax.numpy as np
+import numpy as np
 import random
 import mnist_loader
 import collections
 import utils
 import time
-
-
-
 
 
 def cross_entropy(y_pred, true_label):
